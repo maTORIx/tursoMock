@@ -1,0 +1,23 @@
+{
+  "name": "turso-mock",
+  "version": "1.0.0",
+  "type": "module",
+  "bin": {
+    "tursomock": "./src/cli.ts"
+  },
+  "scripts": {
+    "dev": "bun run --watch src/cli.ts serve",
+    "start": "bun run src/cli.ts serve",
+    "test": "bun test tests/",
+    "reset": "bun run src/cli.ts reset"
+  },
+  "dependencies": {
+    "hono": "^4.0.0",
+    "better-sqlite3": "^11.0.0",
+    "@libsql/client": "^0.14.0"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.0",
+    "@types/bun": "^1.0.0"
+  }
+}
