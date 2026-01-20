@@ -1,23 +1,47 @@
 {
-  "name": "turso-mock",
+  "name": "tursomock",
   "version": "1.0.0",
+  "description": "Turso database mock server for local development and testing",
   "type": "module",
+  "main": "./src/server.ts",
   "bin": {
     "tursomock": "./src/cli.ts"
   },
+  "files": [
+    "src"
+  ],
   "scripts": {
     "dev": "bun run --watch src/cli.ts serve",
     "start": "bun run src/cli.ts serve",
     "test": "bun test tests/",
     "reset": "bun run src/cli.ts reset"
   },
+  "keywords": [
+    "turso",
+    "mock",
+    "sqlite",
+    "libsql",
+    "database",
+    "testing",
+    "bun"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/matorix/tursoMock.git"
+  },
+  "bugs": {
+    "url": "https://github.com/matorix/tursoMock/issues"
+  },
+  "homepage": "https://github.com/matorix/tursoMock#readme",
+  "license": "MIT",
+  "engines": {
+    "bun": ">=1.0.0"
+  },
   "dependencies": {
-    "hono": "^4.0.0",
-    "better-sqlite3": "^11.0.0",
-    "@libsql/client": "^0.14.0"
+    "hono": "^4.0.0"
   },
   "devDependencies": {
-    "@types/better-sqlite3": "^7.6.0",
+    "@libsql/client": "^0.14.0",
     "@types/bun": "^1.0.0"
   }
 }
