@@ -21,8 +21,18 @@ export interface HranaBatchStep {
 	};
 }
 
+export type HranaRequestType =
+	| "execute"
+	| "close"
+	| "batch"
+	| "store_sql"
+	| "close_sql"
+	| "sequence"
+	| "describe"
+	| "get_autocommit";
+
 export interface HranaRequest {
-	type: "execute" | "close" | "batch" | "store_sql";
+	type: HranaRequestType;
 	stmt?: HranaStatement;
 	batch?: { steps: HranaBatchStep[] };
 	sql_id?: number;
@@ -30,6 +40,7 @@ export interface HranaRequest {
 }
 
 export interface HranaPipelineRequest {
+	baton?: string | null;
 	requests: HranaRequest[];
 }
 

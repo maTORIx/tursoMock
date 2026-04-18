@@ -1,6 +1,8 @@
 import { describe, it, expect, beforeAll, afterAll } from "bun:test";
 import { createClient } from "@libsql/client";
-import { createServer } from "../src/server";
+import { createServer, MOCK_PLATFORM_TOKEN } from "../src/server";
+
+const AUTH_HEADERS = { Authorization: `Bearer ${MOCK_PLATFORM_TOKEN}` };
 import { setDbDir, resetAllDbs, closeAllDbs } from "../src/db";
 import { join } from "path";
 import { mkdirSync, existsSync, rmSync } from "fs";
@@ -45,7 +47,7 @@ function createTestPost(overrides: Partial<Post> = {}): Post {
 async function createMockDb(dbName: string) {
 	const resp = await fetch(`${MOCK_SERVER_URL}/v1/organizations/mock/databases`, {
 		method: "POST",
-		headers: { "Content-Type": "application/json" },
+		headers: { "Content-Type": "application/json", ...AUTH_HEADERS },
 		body: JSON.stringify({ name: dbName, group: "mock" }),
 	});
 	return resp.ok || resp.status === 409;
@@ -54,6 +56,7 @@ async function createMockDb(dbName: string) {
 async function deleteMockDb(dbName: string) {
 	await fetch(`${MOCK_SERVER_URL}/v1/organizations/mock/databases/${dbName}`, {
 		method: "DELETE",
+		headers: AUTH_HEADERS,
 	});
 }
 
@@ -290,9 +293,12 @@ describe("Server - Health Check", () => {
 });
 
 describe("Server - Management API", () => {
+	const headers = { "Content-Type": "application/json", ...AUTH_HEADERS };
+
 	it("should list databases", async () => {
 		const response = await fetch(
-			`${MOCK_SERVER_URL}/v1/organizations/mock/databases`
+			`${MOCK_SERVER_URL}/v1/organizations/mock/databases`,
+			{ headers: AUTH_HEADERS }
 		);
 		const data = await response.json();
 		expect(Array.isArray(data.databases)).toBe(true);
@@ -301,12 +307,11 @@ describe("Server - Management API", () => {
 	it("should create and delete database", async () => {
 		const testDbName = `test-create-delete-${Date.now()}`;
 
-		// Create
 		const createResponse = await fetch(
 			`${MOCK_SERVER_URL}/v1/organizations/mock/databases`,
 			{
 				method: "POST",
-				headers: { "Content-Type": "application/json" },
+				headers,
 				body: JSON.stringify({ name: testDbName, group: "mock" }),
 			}
 		);
@@ -314,10 +319,9 @@ describe("Server - Management API", () => {
 		const createData = await createResponse.json();
 		expect(createData.database.Name).toBe(testDbName);
 
-		// Delete
 		const deleteResponse = await fetch(
 			`${MOCK_SERVER_URL}/v1/organizations/mock/databases/${testDbName}`,
-			{ method: "DELETE" }
+			{ method: "DELETE", headers: AUTH_HEADERS }
 		);
 		expect(deleteResponse.ok).toBe(true);
 	});
@@ -325,28 +329,25 @@ describe("Server - Management API", () => {
 	it("should return 409 for duplicate database", async () => {
 		const testDbName = `test-duplicate-${Date.now()}`;
 
-		// Create first time
 		await fetch(`${MOCK_SERVER_URL}/v1/organizations/mock/databases`, {
 			method: "POST",
-			headers: { "Content-Type": "application/json" },
+			headers,
 			body: JSON.stringify({ name: testDbName, group: "mock" }),
 		});
 
-		// Create second time - should fail
 		const response = await fetch(
 			`${MOCK_SERVER_URL}/v1/organizations/mock/databases`,
 			{
 				method: "POST",
-				headers: { "Content-Type": "application/json" },
+				headers,
 				body: JSON.stringify({ name: testDbName, group: "mock" }),
 			}
 		);
 		expect(response.status).toBe(409);
 
-		// Cleanup
 		await fetch(
 			`${MOCK_SERVER_URL}/v1/organizations/mock/databases/${testDbName}`,
-			{ method: "DELETE" }
+			{ method: "DELETE", headers: AUTH_HEADERS }
 		);
 	});
 });

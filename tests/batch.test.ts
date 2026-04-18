@@ -1,6 +1,8 @@
 import { describe, it, expect, beforeAll, afterAll } from "bun:test";
 import { createClient } from "@libsql/client";
-import { createServer } from "../src/server";
+import { createServer, MOCK_PLATFORM_TOKEN } from "../src/server";
+
+const AUTH = { Authorization: `Bearer ${MOCK_PLATFORM_TOKEN}` };
 import { setDbDir, closeAllDbs } from "../src/db";
 import { join } from "path";
 import { mkdirSync, existsSync, rmSync } from "fs";
@@ -38,7 +40,7 @@ describe("Batch Operations", () => {
 	beforeAll(async () => {
 		await fetch(`${MOCK_SERVER_URL}/v1/organizations/mock/databases`, {
 			method: "POST",
-			headers: { "Content-Type": "application/json" },
+			headers: { "Content-Type": "application/json", ...AUTH },
 			body: JSON.stringify({ name: dbName, group: "mock" }),
 		});
 		client = createClient({
@@ -49,7 +51,7 @@ describe("Batch Operations", () => {
 	afterAll(async () => {
 		await fetch(
 			`${MOCK_SERVER_URL}/v1/organizations/mock/databases/${dbName}`,
-			{ method: "DELETE" }
+			{ method: "DELETE", headers: AUTH }
 		);
 	});
 
@@ -138,7 +140,7 @@ describe("Path-based Pipeline", () => {
 	beforeAll(async () => {
 		await fetch(`${MOCK_SERVER_URL}/v1/organizations/mock/databases`, {
 			method: "POST",
-			headers: { "Content-Type": "application/json" },
+			headers: { "Content-Type": "application/json", ...AUTH },
 			body: JSON.stringify({ name: dbName, group: "mock" }),
 		});
 	});
@@ -146,7 +148,7 @@ describe("Path-based Pipeline", () => {
 	afterAll(async () => {
 		await fetch(
 			`${MOCK_SERVER_URL}/v1/organizations/mock/databases/${dbName}`,
-			{ method: "DELETE" }
+			{ method: "DELETE", headers: AUTH }
 		);
 	});
 

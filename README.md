@@ -54,10 +54,15 @@ libsql クライアント用のエンドポイント。
 
 Turso Platform API 互換のデータベース管理エンドポイント。
 
+#### 認証
+
+Management API (`/v1/*`) は `Authorization: Bearer <token>` を要求します。モックでは固定トークン `mock-platform-token` を受け付けます (`MOCK_PLATFORM_TOKEN` としてexport)。Hrana pipeline (libsql接続) は便宜上認証なしで通します。
+
 #### データベース作成
 
 ```bash
 curl -X POST http://localhost:8080/v1/organizations/myorg/databases \
+  -H "Authorization: Bearer mock-platform-token" \
   -H "Content-Type: application/json" \
   -d '{"name": "mydb", "group": "default"}'
 ```
@@ -67,7 +72,7 @@ curl -X POST http://localhost:8080/v1/organizations/myorg/databases \
 {
   "database": {
     "DbId": "mock-mydb-1234567890",
-    "HostName": "mydb.localhost:8080",
+    "Hostname": "mydb.localhost:8080",
     "Name": "mydb"
   }
 }
@@ -89,7 +94,7 @@ curl http://localhost:8080/v1/organizations/myorg/databases
 ```json
 {
   "databases": [
-    { "Name": "mydb", "DbId": "mock-mydb", "HostName": "mydb.localhost:8080" }
+    { "Name": "mydb", "DbId": "mock-mydb", "Hostname": "mydb.localhost:8080" }
   ]
 }
 ```
