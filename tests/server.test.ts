@@ -147,7 +147,7 @@ afterAll(() => {
 
 describe("Server - Posts Mock", () => {
 	const testUserId = `test-mock-${Date.now()}`;
-	const dbName = `user_${testUserId}`;
+	const dbName = `user-${testUserId}`;
 	let client: ReturnType<typeof createClient>;
 
 	beforeAll(async () => {
@@ -257,7 +257,7 @@ describe("Server - Posts Mock", () => {
 
 	it("should isolate data between different users", async () => {
 		const anotherUserId = `test-mock-another-${Date.now()}`;
-		const anotherDbName = `user_${anotherUserId}`;
+		const anotherDbName = `user-${anotherUserId}`;
 
 		await createMockDb(anotherDbName);
 		const anotherClient = getClient(anotherDbName);

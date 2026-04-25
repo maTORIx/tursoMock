@@ -479,16 +479,34 @@ export function createApp(config: ServerConfig) {
 	// libsql HTTP Protocol (Hrana v2/v3)
 	// ============================================
 
+	// Guard pipeline endpoints against silent DB auto-creation. Without this,
+	// `getDb(dbName)` inside handleRequest opens (and creates) the SQLite file
+	// on first access. Callers that lose track of which DBs were provisioned
+	// via the Management API end up with empty schemaless databases, which
+	// surface as confusing `no such table: ...` errors deep in the app.
+	// Real Turso returns an error for queries against non-existent DBs, so
+	// matching that behavior keeps the mock honest.
+	const ensureDbExists = (c: Context, dbName: string): Response | null => {
+		if (!dbExists(dbName)) {
+			return c.json({ error: `database not found: ${dbName}` }, 404);
+		}
+		return null;
+	};
+
 	const subdomainPipeline = async (c: Context) => {
 		const host = c.req.header("host") || "";
 		const hostParts = host.split(".");
 		const dbName = hostParts.length > 1 ? hostParts[0] : "default";
+		const guard = ensureDbExists(c, dbName);
+		if (guard) return guard;
 		const body = await c.req.json<HranaPipelineRequest>();
 		return c.json(handlePipelineRequest(body, dbName));
 	};
 
 	const pathPipeline = async (c: Context) => {
 		const dbName = c.req.param("dbName");
+		const guard = ensureDbExists(c, dbName);
+		if (guard) return guard;
 		const body = await c.req.json<HranaPipelineRequest>();
 		return c.json(handlePipelineRequest(body, dbName));
 	};
