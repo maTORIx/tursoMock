@@ -1,6 +1,6 @@
 import { Hono, type Context } from "hono";
 import { cors } from "hono/cors";
-import { Database } from "bun:sqlite";
+import Database from "libsql";
 import {
 	getDb,
 	closeDb,
@@ -93,8 +93,6 @@ function executeStatement(db: Database, stmt: HranaStatement, dbName: string) {
 
 	const sql = resolveSql(stmt, dbName);
 	const sqlTrimmed = sql.trim();
-	const sqlUpper = sqlTrimmed.toUpperCase();
-	const isSelect = sqlUpper.startsWith("SELECT") || sqlUpper.startsWith("PRAGMA");
 
 	const hasMultipleStatements =
 		(sqlTrimmed.match(/;/g) || []).length > 1 ||
@@ -121,7 +119,9 @@ function executeStatement(db: Database, stmt: HranaStatement, dbName: string) {
 
 		const prepared = db.prepare(sql);
 
-		if (isSelect) {
+		// libsql throws if you .run() a row-returning statement (e.g. SELECT or
+		// INSERT ... RETURNING) — use `.reader` to pick the right call.
+		if (prepared.reader) {
 			const rows = prepared.all(namedArgs) as Record<string, unknown>[];
 			const cols =
 				rows.length > 0
@@ -148,7 +148,7 @@ function executeStatement(db: Database, stmt: HranaStatement, dbName: string) {
 
 	const prepared = db.prepare(sql);
 
-	if (isSelect) {
+	if (prepared.reader) {
 		const rows = prepared.all(...args) as Record<string, unknown>[];
 		const cols =
 			rows.length > 0
@@ -214,8 +214,8 @@ function describeSql(db: Database, sql: string) {
 	if (isReadonly) {
 		try {
 			const prepared = db.prepare(sql);
-			const colNames = prepared.columnNames;
-			cols = colNames.map((name) => ({ name, decltype: null }));
+			// libsql exposes `.columns()` (better-sqlite3 style), not bun's `.columnNames`.
+			cols = prepared.columns().map((c) => ({ name: c.name, decltype: null }));
 		} catch {
 			cols = [];
 		}

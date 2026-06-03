@@ -38,7 +38,8 @@
     "bun": ">=1.0.0"
   },
   "dependencies": {
-    "hono": "^4.0.0"
+    "hono": "^4.0.0",
+    "libsql": "^0.5.28"
   },
   "devDependencies": {
     "@libsql/client": "^0.14.0",

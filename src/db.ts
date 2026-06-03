@@ -1,4 +1,8 @@
-import { Database } from "bun:sqlite";
+// Embedded libSQL (native) instead of bun:sqlite so the mock exposes libSQL's
+// native vector search (F32_BLOB / vector32 / vector_distance_cos /
+// libsql_vector_idx / vector_top_k), matching production Turso semantics.
+// better-sqlite3-compatible synchronous API.
+import Database from "libsql";
 import { existsSync, mkdirSync, unlinkSync, readdirSync } from "fs";
 import { join } from "path";
 
