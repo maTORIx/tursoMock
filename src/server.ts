@@ -29,7 +29,8 @@ function convertHranaValue(val: HranaValue): unknown {
 	if (val.type === "integer") return BigInt(val.value as string);
 	if (val.type === "float") return Number(val.value);
 	if (val.type === "text") return val.value;
-	if (val.type === "blob") return Buffer.from(val.value as string, "base64");
+	// Hrana JSON encodes blobs as { type: "blob", base64: "..." } (accept legacy `value` too).
+	if (val.type === "blob") return Buffer.from((val.base64 ?? val.value) as string, "base64");
 	return val.value;
 }
 
@@ -49,8 +50,12 @@ function toHranaValue(val: unknown): HranaValue {
 	if (typeof val === "string") {
 		return { type: "text", value: val };
 	}
+	// libsql returns BLOB columns as ArrayBuffer (JsArrayBuffer::from_slice).
+	if (val instanceof ArrayBuffer) {
+		return { type: "blob", base64: Buffer.from(val).toString("base64") };
+	}
 	if (val instanceof Uint8Array || Buffer.isBuffer(val)) {
-		return { type: "blob", value: Buffer.from(val).toString("base64") };
+		return { type: "blob", base64: Buffer.from(val).toString("base64") };
 	}
 	return { type: "text", value: String(val) };
 }
@@ -148,8 +153,12 @@ function executeStatement(db: Database, stmt: HranaStatement, dbName: string) {
 
 	const prepared = db.prepare(sql);
 
+	// NOTE: always pass positional args as ONE array argument. Spreading them
+	// (`.all(...args)`) breaks when a lone Buffer/blob param is passed: libsql's
+	// JS wrapper treats a single object argument as a *named*-params object and
+	// the native side panics (`parameter_name(...).unwrap()` on a `?` placeholder).
 	if (prepared.reader) {
-		const rows = prepared.all(...args) as Record<string, unknown>[];
+		const rows = prepared.all(args) as Record<string, unknown>[];
 		const cols =
 			rows.length > 0
 				? Object.keys(rows[0]).map((name) => ({ name, decltype: null }))
@@ -162,7 +171,7 @@ function executeStatement(db: Database, stmt: HranaStatement, dbName: string) {
 		return result;
 	}
 
-	const runResult = prepared.run(...args);
+	const runResult = prepared.run(args);
 	const result = baseStmtResult();
 	result.affected_row_count = runResult.changes;
 	result.last_insert_rowid = runResult.lastInsertRowid

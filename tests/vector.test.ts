@@ -74,6 +74,42 @@ describe("libSQL native vector search", () => {
 		expect(top.rows.length).toBe(2);
 	});
 
+	// Raw F32 little-endian blob params (what timeloom sends instead of
+	// vector32('[...]') text). Regression: libsql's JS wrapper treats a lone
+	// object bind param as a *named*-params object, so a single Buffer arg
+	// panicked the native side until the server passed positional args as one
+	// array. Also covers Hrana JSON blob encoding ({type:"blob", base64}) both
+	// directions and ArrayBuffer results from BLOB columns.
+	it("binds raw F32 blob params for insert / distance / top_k and returns blobs", async () => {
+		const vec = (arr: number[]) => new Uint8Array(new Float32Array(arr).buffer);
+		await client.execute("CREATE TABLE blobs (id INTEGER PRIMARY KEY, emb F32_BLOB(3))");
+		await client.execute("CREATE INDEX blobs_idx ON blobs(libsql_vector_idx(emb))");
+		await client.execute({ sql: "INSERT INTO blobs (id, emb) VALUES (?, ?)", args: [1, vec([1, 0, 0])] });
+		await client.execute({ sql: "INSERT INTO blobs (id, emb) VALUES (?, ?)", args: [2, vec([0, 1, 0])] });
+		await client.execute({ sql: "INSERT INTO blobs (id, emb) VALUES (?, ?)", args: [3, vec([0.9, 0.1, 0])] });
+
+		const dist = await client.execute({
+			sql: "SELECT id, vector_distance_cos(emb, ?) AS d FROM blobs ORDER BY d ASC",
+			args: [vec([1, 0, 0])],
+		});
+		expect(dist.rows.map((r) => Number(r.id))).toEqual([1, 3, 2]);
+
+		const top = await client.execute({
+			sql: "SELECT blobs.id AS id FROM vector_top_k('blobs_idx', ?, 2) AS vtk JOIN blobs ON blobs.rowid = vtk.id",
+			args: [vec([1, 0, 0])],
+		});
+		expect(top.rows.length).toBe(2);
+		expect(top.rows.map((r) => Number(r.id))).toContain(1);
+
+		// blob column comes back as a binary value that round-trips to the same floats
+		const back = await client.execute({ sql: "SELECT emb FROM blobs WHERE id = 1", args: [] });
+		const raw = back.rows[0].emb as ArrayBuffer | Uint8Array;
+		const bytes = raw instanceof ArrayBuffer ? new Uint8Array(raw) : raw;
+		expect(bytes.byteLength).toBe(12);
+		const f32 = new Float32Array(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength));
+		expect(Array.from(f32)).toEqual([1, 0, 0]);
+	});
+
 	// INSERT ... RETURNING returns rows; libsql requires .all() (not .run()).
 	// kannon uses RETURNING against Turso (src/routes/targets/search.tsx), so the
 	// mock must handle it via the `.reader` branch.

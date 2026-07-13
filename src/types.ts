@@ -1,6 +1,8 @@
 export interface HranaValue {
 	type: "integer" | "float" | "text" | "blob" | "null";
 	value?: string | number;
+	/** Hrana JSON encoding carries blobs in `base64`, not `value`. */
+	base64?: string;
 }
 
 export interface HranaStatement {
