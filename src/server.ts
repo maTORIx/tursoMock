@@ -29,7 +29,8 @@ export const MOCK_DB_JWT = "mock-db-jwt-token";
 /** Group/db token minted with `authorization=read-only`. Pipelines sent with it reject writes. */
 export const MOCK_DB_JWT_READ_ONLY = "mock-db-jwt-read-only";
 
-const READ_ONLY_RE = /^\s*(SELECT|WITH|EXPLAIN|PRAGMA\s+\w+\s*(;|$)|VALUES)/i;
+// トランザクションの制御 (batch の BEGIN / COMMIT) は読み取りでも送られてくるので通す
+const READ_ONLY_RE = /^\s*(SELECT|WITH|EXPLAIN|PRAGMA\s+\w+\s*(;|$)|VALUES|BEGIN|COMMIT|END|ROLLBACK)\b/i;
 
 function assertWritable(sql: string, readOnly: boolean) {
 	if (readOnly && !READ_ONLY_RE.test(sql)) {
