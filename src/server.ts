@@ -625,6 +625,8 @@ export function createServer(config: ServerConfig) {
 	return {
 		port: config.port,
 		hostname: "0.0.0.0",
+		// DB ファイルのアップロード (/v1/upload) は GB 単位になる。Bun の既定 (128MB) では 413 になる
+		maxRequestBodySize: 64 * 1024 ** 3,
 		fetch: app.fetch,
 	};
 }
