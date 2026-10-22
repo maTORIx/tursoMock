@@ -9,6 +9,9 @@ import {
 	getDbCacheSize,
 	dbExists,
 	sqlStorage,
+	markAwaitingUpload,
+	isAwaitingUpload,
+	replaceDbFile,
 } from "./db";
 import type {
 	HranaValue,
@@ -23,6 +26,16 @@ const DB_NAME_RE = /^[a-z0-9-]{1,64}$/;
 
 export const MOCK_PLATFORM_TOKEN = "mock-platform-token";
 export const MOCK_DB_JWT = "mock-db-jwt-token";
+/** Group/db token minted with `authorization=read-only`. Pipelines sent with it reject writes. */
+export const MOCK_DB_JWT_READ_ONLY = "mock-db-jwt-read-only";
+
+const READ_ONLY_RE = /^\s*(SELECT|WITH|EXPLAIN|PRAGMA\s+\w+\s*(;|$)|VALUES)/i;
+
+function assertWritable(sql: string, readOnly: boolean) {
+	if (readOnly && !READ_ONLY_RE.test(sql)) {
+		throw new Error("SQLITE_AUTH: write statement with a read-only token");
+	}
+}
 
 function convertHranaValue(val: HranaValue): unknown {
 	if (val.type === "null") return null;
@@ -87,7 +100,12 @@ function baseStmtResult() {
 	};
 }
 
-function executeStatement(db: Database, stmt: HranaStatement, dbName: string) {
+function executeStatement(
+	db: Database,
+	stmt: HranaStatement,
+	dbName: string,
+	readOnly = false,
+) {
 	const args: unknown[] = [];
 
 	if (stmt.args) {
@@ -97,6 +115,7 @@ function executeStatement(db: Database, stmt: HranaStatement, dbName: string) {
 	}
 
 	const sql = resolveSql(stmt, dbName);
+	assertWritable(sql, readOnly);
 	const sqlTrimmed = sql.trim();
 
 	const hasMultipleStatements =
@@ -241,7 +260,8 @@ function describeSql(db: Database, sql: string) {
 function handleRequest(
 	request: HranaRequest,
 	dbName: string,
-	dbSqlStorage: Map<number, string>
+	dbSqlStorage: Map<number, string>,
+	readOnly: boolean,
 ): unknown {
 	const db = getDb(dbName);
 
@@ -257,7 +277,7 @@ function handleRequest(
 		}
 
 		case "execute": {
-			const result = executeStatement(db, request.stmt!, dbName);
+			const result = executeStatement(db, request.stmt!, dbName, readOnly);
 			return { type: "ok", response: { type: "execute", result } };
 		}
 
@@ -274,7 +294,7 @@ function handleRequest(
 					continue;
 				}
 				try {
-					const result = executeStatement(db, step.stmt, dbName);
+					const result = executeStatement(db, step.stmt, dbName, readOnly);
 					stepResults.push({ ok: true });
 					batchStepResults.push(result);
 					batchStepErrors.push(null);
@@ -310,6 +330,7 @@ function handleRequest(
 				}
 			}
 			if (!sql) throw new Error("No SQL provided for sequence");
+			assertWritable(sql, readOnly);
 			db.exec(sql);
 			return { type: "ok", response: { type: "sequence" } };
 		}
@@ -343,7 +364,11 @@ function handleRequest(
 	throw new Error(`Unknown request type: ${(request as HranaRequest).type}`);
 }
 
-function handlePipelineRequest(body: HranaPipelineRequest, dbName: string) {
+function handlePipelineRequest(
+	body: HranaPipelineRequest,
+	dbName: string,
+	readOnly = false,
+) {
 	const results: unknown[] = [];
 
 	if (!sqlStorage.has(dbName)) {
@@ -353,7 +378,7 @@ function handlePipelineRequest(body: HranaPipelineRequest, dbName: string) {
 
 	for (const request of body.requests) {
 		try {
-			results.push(handleRequest(request, dbName, dbSqlStorage));
+			results.push(handleRequest(request, dbName, dbSqlStorage, readOnly));
 		} catch (e) {
 			const error = e as Error;
 			results.push({
@@ -371,6 +396,12 @@ function handlePipelineRequest(body: HranaPipelineRequest, dbName: string) {
 		base_url: null,
 		results,
 	};
+}
+
+function hostDbName(c: Context): string {
+	const host = c.req.header("host") || "";
+	const hostParts = host.split(".");
+	return hostParts.length > 1 ? hostParts[0] : "default";
 }
 
 function databaseObject(name: string, port: number) {
@@ -398,6 +429,8 @@ export function createApp(config: ServerConfig) {
 	// Platform API auth middleware (fixed token)
 	// ============================================
 	app.use("/v1/*", async (c, next) => {
+		// /v1/upload is served on the database host and takes a database token.
+		if (c.req.path === "/v1/upload") return next();
 		const header = c.req.header("Authorization") || "";
 		const match = header.match(/^Bearer\s+(.+)$/);
 		if (!match || match[1] !== MOCK_PLATFORM_TOKEN) {
@@ -411,7 +444,11 @@ export function createApp(config: ServerConfig) {
 	// ============================================
 
 	app.post("/v1/organizations/:org/databases", async (c) => {
-		const body = await c.req.json<{ name: string; group?: string }>();
+		const body = await c.req.json<{
+			name: string;
+			group?: string;
+			seed?: { type: string };
+		}>();
 		const dbName = body.name;
 
 		if (!dbName || !DB_NAME_RE.test(dbName)) {
@@ -431,8 +468,12 @@ export function createApp(config: ServerConfig) {
 			);
 		}
 
+		if (body.seed && body.seed.type !== "database_upload") {
+			return c.json({ error: `unsupported seed type: ${body.seed.type}` }, 400);
+		}
 		const db = getDb(dbName);
 		db.exec("SELECT 1");
+		if (body.seed?.type === "database_upload") markAwaitingUpload(dbName);
 
 		const obj = databaseObject(dbName, port);
 		if (body.group) obj.group = body.group;
@@ -455,6 +496,51 @@ export function createApp(config: ServerConfig) {
 			);
 		}
 		return c.json({ jwt: MOCK_DB_JWT });
+	});
+
+	// Group tokens: one token covers every database in the group. The mock
+	// does not scope by group; `authorization=read-only` yields a token whose
+	// pipelines reject writes.
+	app.post("/v1/organizations/:org/groups/:group/auth/tokens", (c) => {
+		const readOnly = c.req.query("authorization") === "read-only";
+		return c.json({ jwt: readOnly ? MOCK_DB_JWT_READ_ONLY : MOCK_DB_JWT });
+	});
+
+	app.get("/v1/organizations/:org/groups", (c) =>
+		c.json({ groups: [{ name: "default", locations: ["mock"], primary: "mock" }] }),
+	);
+
+	app.post("/v1/organizations/:org/groups", async (c) => {
+		const body = await c.req.json<{ name: string; location?: string }>();
+		return c.json({
+			group: { name: body.name, locations: [body.location ?? "mock"], primary: body.location ?? "mock" },
+		});
+	});
+
+	// Upload a whole SQLite file into a database created with
+	// `seed: { type: "database_upload" }`. Like Turso, the target is taken
+	// from the Host subdomain and the file must be in WAL mode.
+	app.post("/v1/upload", async (c) => {
+		const dbName = hostDbName(c);
+		const auth = c.req.header("Authorization") || "";
+		if (!/^Bearer\s+\S+/.test(auth)) return c.json({ error: "unauthorized" }, 401);
+		if (!dbExists(dbName)) {
+			return c.json({ error: `database not found: ${dbName}` }, 404);
+		}
+		if (!isAwaitingUpload(dbName)) {
+			return c.json({ error: `database ${dbName} was not created for upload` }, 400);
+		}
+		const bytes = new Uint8Array(await c.req.arrayBuffer());
+		const header = new TextDecoder().decode(bytes.subarray(0, 15));
+		if (header !== "SQLite format 3") {
+			return c.json({ error: "not a SQLite database file" }, 400);
+		}
+		// Header bytes 18/19 are the file format read/write versions: 2 = WAL.
+		if (bytes[18] !== 2 || bytes[19] !== 2) {
+			return c.json({ error: "database file must be in WAL mode" }, 400);
+		}
+		replaceDbFile(dbName, bytes);
+		return c.json({ ok: true, size: bytes.byteLength });
 	});
 
 	app.get("/v1/organizations/:org/databases/:name", (c) => {
@@ -502,14 +588,15 @@ export function createApp(config: ServerConfig) {
 		return null;
 	};
 
+	const isReadOnly = (c: Context) =>
+		(c.req.header("Authorization") || "").endsWith(MOCK_DB_JWT_READ_ONLY);
+
 	const subdomainPipeline = async (c: Context) => {
-		const host = c.req.header("host") || "";
-		const hostParts = host.split(".");
-		const dbName = hostParts.length > 1 ? hostParts[0] : "default";
+		const dbName = hostDbName(c);
 		const guard = ensureDbExists(c, dbName);
 		if (guard) return guard;
 		const body = await c.req.json<HranaPipelineRequest>();
-		return c.json(handlePipelineRequest(body, dbName));
+		return c.json(handlePipelineRequest(body, dbName, isReadOnly(c)));
 	};
 
 	const pathPipeline = async (c: Context) => {
@@ -517,7 +604,7 @@ export function createApp(config: ServerConfig) {
 		const guard = ensureDbExists(c, dbName);
 		if (guard) return guard;
 		const body = await c.req.json<HranaPipelineRequest>();
-		return c.json(handlePipelineRequest(body, dbName));
+		return c.json(handlePipelineRequest(body, dbName, isReadOnly(c)));
 	};
 
 	app.post("/v2/pipeline", subdomainPipeline);

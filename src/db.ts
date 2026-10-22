@@ -3,7 +3,7 @@
 // libsql_vector_idx / vector_top_k), matching production Turso semantics.
 // better-sqlite3-compatible synchronous API.
 import Database from "libsql";
-import { existsSync, mkdirSync, unlinkSync, readdirSync } from "fs";
+import { existsSync, mkdirSync, unlinkSync, readdirSync, writeFileSync } from "fs";
 import { join } from "path";
 
 let DB_DIR = "./db";
@@ -65,6 +65,31 @@ export function deleteDbFiles(dbName: string): void {
 		if (existsSync(walPath)) unlinkSync(walPath);
 		if (existsSync(shmPath)) unlinkSync(shmPath);
 	}
+	const marker = uploadMarker(dbName);
+	if (existsSync(marker)) unlinkSync(marker);
+}
+
+function uploadMarker(dbName: string): string {
+	return join(DB_DIR, `${dbName}.awaiting-upload`);
+}
+
+/** A database created with `seed: database_upload` accepts one /v1/upload. */
+export function markAwaitingUpload(dbName: string): void {
+	ensureDbDir();
+	writeFileSync(uploadMarker(dbName), "");
+}
+
+export function isAwaitingUpload(dbName: string): boolean {
+	return existsSync(uploadMarker(dbName));
+}
+
+/** Swap the database file for an uploaded one (closes the cached handle first). */
+export function replaceDbFile(dbName: string, bytes: Uint8Array): void {
+	closeDb(dbName);
+	const dbPath = join(DB_DIR, `${dbName}.db`);
+	for (const p of [`${dbPath}-wal`, `${dbPath}-shm`]) if (existsSync(p)) unlinkSync(p);
+	writeFileSync(dbPath, bytes);
+	unlinkSync(uploadMarker(dbName));
 }
 
 export function listDatabases(): string[] {
@@ -80,7 +105,12 @@ export function resetAllDbs(): void {
 	const files = readdirSync(DB_DIR);
 	for (const file of files) {
 		const filePath = join(DB_DIR, file);
-		if (file.endsWith(".db") || file.endsWith(".db-wal") || file.endsWith(".db-shm")) {
+		if (
+			file.endsWith(".db") ||
+			file.endsWith(".db-wal") ||
+			file.endsWith(".db-shm") ||
+			file.endsWith(".awaiting-upload")
+		) {
 			unlinkSync(filePath);
 		}
 	}

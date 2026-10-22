@@ -99,6 +99,33 @@ curl http://localhost:8080/v1/organizations/myorg/databases
 }
 ```
 
+#### DB ファイルのアップロード
+
+Turso の `seed: { type: "database_upload" }` と `POST /v1/upload` を再現します。
+
+```bash
+curl -X POST http://localhost:8080/v1/organizations/myorg/databases \
+  -H "Authorization: Bearer mock-platform-token" \
+  -d '{"name": "mydb", "group": "rag", "seed": {"type": "database_upload"}}'
+
+curl -X POST http://mydb.localhost:8080/v1/upload \
+  -H "Authorization: Bearer mock-db-jwt-token" \
+  --data-binary @mydb.db
+```
+
+- アップロードできるのは `database_upload` で作った DB に 1 回だけ
+- ファイルは WAL モード (ヘッダの 18・19 バイト目が 2) でなければ 400
+
+#### グループトークン
+
+```bash
+curl -X POST "http://localhost:8080/v1/organizations/myorg/groups/rag/auth/tokens?authorization=read-only" \
+  -H "Authorization: Bearer mock-platform-token"
+```
+
+- 固定値を返します: full-access は `mock-db-jwt-token`、read-only は `mock-db-jwt-read-only`
+- read-only のトークンで送った pipeline は書き込み文を `SQLITE_AUTH` で拒否します (トークン無しは従来どおり素通し)
+
 > **Note**: `:org` パラメータは任意の値を指定できます（モックのため無視されます）
 
 ## ライセンス
