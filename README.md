@@ -124,7 +124,7 @@ curl -X POST "http://localhost:8080/v1/organizations/myorg/groups/rag/auth/token
 ```
 
 - 固定値を返します: full-access は `mock-db-jwt-token`、read-only は `mock-db-jwt-read-only`
-- read-only のトークンで送った pipeline は書き込み文を `SQLITE_AUTH` で拒否します (トークン無しは従来どおり素通し)
+- read-only のトークンで送った pipeline は、読み取り専用 (`mode=ro`) で開いた別の接続で実行します。書き込みは文の形 (CTE・複文・`PRAGMA query_only = 0` など) にかかわらず SQLite が `SQLITE_READONLY` で拒否します (トークン無しは従来どおり素通し)
 
 > **Note**: `:org` パラメータは任意の値を指定できます（モックのため無視されます）
 

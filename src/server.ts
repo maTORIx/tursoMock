@@ -3,6 +3,7 @@ import { cors } from "hono/cors";
 import Database from "libsql";
 import {
 	getDb,
+	getReadOnlyDb,
 	closeDb,
 	deleteDbFiles,
 	listDatabases,
@@ -26,17 +27,12 @@ const DB_NAME_RE = /^[a-z0-9-]{1,64}$/;
 
 export const MOCK_PLATFORM_TOKEN = "mock-platform-token";
 export const MOCK_DB_JWT = "mock-db-jwt-token";
-/** Group/db token minted with `authorization=read-only`. Pipelines sent with it reject writes. */
+/**
+ * Group/db token minted with `authorization=read-only`. Pipelines sent with it run on a connection
+ * opened with `mode=ro` (getReadOnlyDb), so SQLite itself rejects every write (SQLITE_READONLY) —
+ * no matter how the statement starts (CTE, multi-statement, PRAGMA query_only = 0, ...).
+ */
 export const MOCK_DB_JWT_READ_ONLY = "mock-db-jwt-read-only";
-
-// トランザクションの制御 (batch の BEGIN / COMMIT) は読み取りでも送られてくるので通す
-const READ_ONLY_RE = /^\s*(SELECT|WITH|EXPLAIN|PRAGMA\s+\w+\s*(;|$)|VALUES|BEGIN|COMMIT|END|ROLLBACK)\b/i;
-
-function assertWritable(sql: string, readOnly: boolean) {
-	if (readOnly && !READ_ONLY_RE.test(sql)) {
-		throw new Error("SQLITE_AUTH: write statement with a read-only token");
-	}
-}
 
 function convertHranaValue(val: HranaValue): unknown {
 	if (val.type === "null") return null;
@@ -105,7 +101,6 @@ function executeStatement(
 	db: Database,
 	stmt: HranaStatement,
 	dbName: string,
-	readOnly = false,
 ) {
 	const args: unknown[] = [];
 
@@ -116,7 +111,6 @@ function executeStatement(
 	}
 
 	const sql = resolveSql(stmt, dbName);
-	assertWritable(sql, readOnly);
 	const sqlTrimmed = sql.trim();
 
 	const hasMultipleStatements =
@@ -264,7 +258,7 @@ function handleRequest(
 	dbSqlStorage: Map<number, string>,
 	readOnly: boolean,
 ): unknown {
-	const db = getDb(dbName);
+	const db = readOnly ? getReadOnlyDb(dbName) : getDb(dbName);
 
 	switch (request.type) {
 		case "store_sql": {
@@ -278,7 +272,7 @@ function handleRequest(
 		}
 
 		case "execute": {
-			const result = executeStatement(db, request.stmt!, dbName, readOnly);
+			const result = executeStatement(db, request.stmt!, dbName);
 			return { type: "ok", response: { type: "execute", result } };
 		}
 
@@ -295,7 +289,7 @@ function handleRequest(
 					continue;
 				}
 				try {
-					const result = executeStatement(db, step.stmt, dbName, readOnly);
+					const result = executeStatement(db, step.stmt, dbName);
 					stepResults.push({ ok: true });
 					batchStepResults.push(result);
 					batchStepErrors.push(null);
@@ -331,7 +325,6 @@ function handleRequest(
 				}
 			}
 			if (!sql) throw new Error("No SQL provided for sequence");
-			assertWritable(sql, readOnly);
 			db.exec(sql);
 			return { type: "ok", response: { type: "sequence" } };
 		}

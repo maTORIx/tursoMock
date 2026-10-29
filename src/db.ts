@@ -4,12 +4,14 @@
 // better-sqlite3-compatible synchronous API.
 import Database from "libsql";
 import { existsSync, mkdirSync, unlinkSync, readdirSync, writeFileSync } from "fs";
-import { join } from "path";
+import { join, resolve } from "path";
 
 let DB_DIR = "./db";
 
 // Database connection cache
 const dbCache: Map<string, Database> = new Map();
+// read-only トークン用の接続 (SQLITE_OPEN_READONLY)。SQL の中身にかかわらず SQLite が書き込みを拒む
+const readOnlyCache: Map<string, Database> = new Map();
 
 // SQL storage for sql_id references
 export const sqlStorage: Map<string, Map<number, string>> = new Map();
@@ -39,19 +41,36 @@ export function getDb(dbName: string): Database {
 	return db;
 }
 
+/**
+ * read-only トークンの接続。`mode=ro` で開くので、CTE や複文に紛れた書き込みも
+ * `PRAGMA query_only = 0` も SQLite が SQLITE_READONLY で拒む (文の先頭の語では判定しない)。
+ * ファイルは書ける接続 (getDb) が先に作る。
+ */
+export function getReadOnlyDb(dbName: string): Database {
+	const cached = readOnlyCache.get(dbName);
+	if (cached) return cached;
+	getDb(dbName);
+	const path = resolve(DB_DIR, `${dbName}.db`).replace(/[%?#]/g, (c) => `%${c.charCodeAt(0).toString(16)}`);
+	const db = new Database(`file:${path}?mode=ro`);
+	readOnlyCache.set(dbName, db);
+	return db;
+}
+
 export function closeDb(dbName: string): void {
-	const db = dbCache.get(dbName);
-	if (db) {
-		db.close();
-		dbCache.delete(dbName);
+	for (const cache of [dbCache, readOnlyCache]) {
+		const db = cache.get(dbName);
+		if (db) {
+			db.close();
+			cache.delete(dbName);
+		}
 	}
 }
 
 export function closeAllDbs(): void {
-	for (const [name, db] of dbCache) {
-		db.close();
+	for (const cache of [readOnlyCache, dbCache]) {
+		for (const [, db] of cache) db.close();
+		cache.clear();
 	}
-	dbCache.clear();
 	sqlStorage.clear();
 }
 
