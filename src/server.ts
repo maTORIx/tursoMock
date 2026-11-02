@@ -20,6 +20,7 @@ import type {
 } from "./types";
 
 const DB_NAME_RE = /^[a-z0-9-]{1,64}$/;
+const NAMESPACE_RE = /^[a-z0-9-]{1,64}$/;
 
 export const MOCK_PLATFORM_TOKEN = "mock-platform-token";
 export const MOCK_DB_JWT = "mock-db-jwt-token";
@@ -388,11 +389,19 @@ function databaseObject(name: string, port: number) {
 	};
 }
 
-export function createApp(config: ServerConfig) {
+/**
+ * Storage key of a database. Inside `/ns/:ns/...` the same name maps to a
+ * separate database, so concurrent clients (e.g. parallel test files) can each
+ * use `subject-1` without seeing one another.
+ */
+function dbKey(c: Context, dbName: string): string {
+	const namespace = c.req.param("ns");
+	return namespace ? `${namespace}/${dbName}` : dbName;
+}
+
+function createApi(config: ServerConfig) {
 	const app = new Hono();
 	const { port } = config;
-
-	app.use("*", cors());
 
 	// ============================================
 	// Platform API auth middleware (fixed token)
@@ -424,14 +433,14 @@ export function createApp(config: ServerConfig) {
 			);
 		}
 
-		if (dbExists(dbName)) {
+		if (dbExists(dbKey(c, dbName))) {
 			return c.json(
 				{ error: `database with name ${dbName} already exists` },
 				409
 			);
 		}
 
-		const db = getDb(dbName);
+		const db = getDb(dbKey(c, dbName));
 		db.exec("SELECT 1");
 
 		const obj = databaseObject(dbName, port);
@@ -448,7 +457,7 @@ export function createApp(config: ServerConfig) {
 
 	app.post("/v1/organizations/:org/databases/:name/auth/tokens", (c) => {
 		const dbName = c.req.param("name");
-		if (!dbExists(dbName)) {
+		if (!dbExists(dbKey(c, dbName))) {
 			return c.json(
 				{ error: `could not find database with name ${dbName}` },
 				404
@@ -459,7 +468,7 @@ export function createApp(config: ServerConfig) {
 
 	app.get("/v1/organizations/:org/databases/:name", (c) => {
 		const dbName = c.req.param("name");
-		if (!dbExists(dbName)) {
+		if (!dbExists(dbKey(c, dbName))) {
 			return c.json({ error: "database not found" }, 404);
 		}
 		return c.json({ database: databaseObject(dbName, port) });
@@ -467,13 +476,16 @@ export function createApp(config: ServerConfig) {
 
 	app.delete("/v1/organizations/:org/databases/:name", (c) => {
 		const dbName = c.req.param("name");
-		closeDb(dbName);
-		deleteDbFiles(dbName);
+		const key = dbKey(c, dbName);
+		closeDb(key);
+		deleteDbFiles(key);
 		return c.json({ database: databaseObject(dbName, port) });
 	});
 
 	app.get("/v1/organizations/:org/databases", (c) => {
-		const databases = listDatabases().map((name) => databaseObject(name, port));
+		const databases = listDatabases(c.req.param("ns")).map((name) =>
+			databaseObject(name, port)
+		);
 		return c.json({ databases });
 	});
 
@@ -506,18 +518,19 @@ export function createApp(config: ServerConfig) {
 		const host = c.req.header("host") || "";
 		const hostParts = host.split(".");
 		const dbName = hostParts.length > 1 ? hostParts[0] : "default";
-		const guard = ensureDbExists(c, dbName);
+		const key = dbKey(c, dbName);
+		const guard = ensureDbExists(c, key);
 		if (guard) return guard;
 		const body = await c.req.json<HranaPipelineRequest>();
-		return c.json(handlePipelineRequest(body, dbName));
+		return c.json(handlePipelineRequest(body, key));
 	};
 
 	const pathPipeline = async (c: Context) => {
-		const dbName = c.req.param("dbName");
-		const guard = ensureDbExists(c, dbName);
+		const key = dbKey(c, c.req.param("dbName"));
+		const guard = ensureDbExists(c, key);
 		if (guard) return guard;
 		const body = await c.req.json<HranaPipelineRequest>();
-		return c.json(handlePipelineRequest(body, dbName));
+		return c.json(handlePipelineRequest(body, key));
 	};
 
 	app.post("/v2/pipeline", subdomainPipeline);
@@ -528,6 +541,31 @@ export function createApp(config: ServerConfig) {
 	app.get("/health", (c) => {
 		return c.json({ status: "ok", databases: getDbCacheSize() });
 	});
+
+	return app;
+}
+
+export function createApp(config: ServerConfig) {
+	const app = new Hono();
+	const api = createApi(config);
+
+	app.use("*", cors());
+
+	app.use("/ns/:ns/*", async (c, next) => {
+		if (!NAMESPACE_RE.test(c.req.param("ns"))) {
+			return c.json(
+				{
+					error:
+						"invalid namespace: must be lowercase letters, numbers, dashes, max 64 chars",
+				},
+				400
+			);
+		}
+		await next();
+	});
+
+	app.route("/ns/:ns", api);
+	app.route("/", api);
 
 	return app;
 }

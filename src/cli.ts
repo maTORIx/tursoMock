@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 import { createServer } from "./server";
-import { setDbDir, getDbDir, resetAllDbs, ensureDbDir, listDatabases } from "./db";
+import { setDbDir, setInMemory, resetAllDbs, ensureDbDir, listDatabases } from "./db";
 import { resolve } from "path";
 import { createInterface } from "readline";
 
@@ -38,12 +38,14 @@ Usage:
 Options:
   --port <number>     Port to listen on (default: 8080)
   --db-dir <path>     Database directory (default: ./db)
+  --memory            Keep databases in memory (nothing is written to disk)
   --help, -h          Show this help message
 
 Examples:
   tursomock serve
   tursomock serve --port 3000
   tursomock serve --db-dir ./test-db --port 8080
+  tursomock serve --memory --port 8088
 `);
 }
 
@@ -76,6 +78,8 @@ function parseArgs(args: string[]): Record<string, string | boolean> {
 			result.version = true;
 		} else if (arg === "--force" || arg === "-f") {
 			result.force = true;
+		} else if (arg === "--memory") {
+			result.memory = true;
 		} else if (arg === "--port") {
 			result.port = args[++i];
 		} else if (arg === "--db-dir") {
@@ -111,12 +115,13 @@ async function serveCommand(args: Record<string, string | boolean>) {
 	const dbDir = args.dbDir ? resolve(args.dbDir as string) : resolve("./db");
 
 	setDbDir(dbDir);
-	ensureDbDir();
+	setInMemory(args.memory === true);
+	if (!args.memory) ensureDbDir();
 
 	const server = createServer({ port, dbDir });
 
 	console.log(`Turso Mock Server running on http://localhost:${port}`);
-	console.log(`DB directory: ${dbDir}`);
+	console.log(args.memory ? "DB storage: in memory" : `DB directory: ${dbDir}`);
 	console.log(`Use subdomain format: http://<dbname>.localhost:${port}`);
 
 	Bun.serve(server);

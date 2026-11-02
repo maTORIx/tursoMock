@@ -3,16 +3,26 @@
 // libsql_vector_idx / vector_top_k), matching production Turso semantics.
 // better-sqlite3-compatible synchronous API.
 import Database from "libsql";
-import { existsSync, mkdirSync, unlinkSync, readdirSync } from "fs";
-import { join } from "path";
+import { existsSync, mkdirSync, rmSync, unlinkSync, readdirSync } from "fs";
+import { dirname, join } from "path";
 
 let DB_DIR = "./db";
+let IN_MEMORY = false;
 
 // Database connection cache
 const dbCache: Map<string, Database> = new Map();
 
 // SQL storage for sql_id references
 export const sqlStorage: Map<string, Map<number, string>> = new Map();
+
+/**
+ * Keep every database in process memory instead of on disk. Data is gone when
+ * the server stops; intended for test suites, where it removes the fsync cost
+ * of each autocommit write.
+ */
+export function setInMemory(enabled: boolean): void {
+	IN_MEMORY = enabled;
+}
 
 export function setDbDir(dir: string): void {
 	DB_DIR = dir;
@@ -28,13 +38,18 @@ export function ensureDbDir(): void {
 	}
 }
 
+function prepareDbPath(dbName: string): string {
+	const dbPath = join(DB_DIR, `${dbName}.db`);
+	// Namespaced databases ("<ns>/<db>") live in a subdirectory.
+	mkdirSync(dirname(dbPath), { recursive: true });
+	return dbPath;
+}
+
 export function getDb(dbName: string): Database {
 	if (dbCache.has(dbName)) {
 		return dbCache.get(dbName)!;
 	}
-	ensureDbDir();
-	const dbPath = join(DB_DIR, `${dbName}.db`);
-	const db = new Database(dbPath);
+	const db = new Database(IN_MEMORY ? ":memory:" : prepareDbPath(dbName));
 	dbCache.set(dbName, db);
 	return db;
 }
@@ -67,9 +82,18 @@ export function deleteDbFiles(dbName: string): void {
 	}
 }
 
-export function listDatabases(): string[] {
-	ensureDbDir();
-	return readdirSync(DB_DIR)
+/** List the databases directly under `namespace`, or the un-namespaced ones when omitted. */
+export function listDatabases(namespace?: string): string[] {
+	if (IN_MEMORY) {
+		const prefix = namespace ? `${namespace}/` : "";
+		return [...dbCache.keys()]
+			.filter((key) => key.startsWith(prefix))
+			.map((key) => key.slice(prefix.length))
+			.filter((name) => !name.includes("/"));
+	}
+	const dir = namespace ? join(DB_DIR, namespace) : DB_DIR;
+	if (!existsSync(dir)) return [];
+	return readdirSync(dir)
 		.filter((f) => f.endsWith(".db"))
 		.map((f) => f.replace(".db", ""));
 }
@@ -77,11 +101,13 @@ export function listDatabases(): string[] {
 export function resetAllDbs(): void {
 	closeAllDbs();
 	ensureDbDir();
-	const files = readdirSync(DB_DIR);
-	for (const file of files) {
-		const filePath = join(DB_DIR, file);
-		if (file.endsWith(".db") || file.endsWith(".db-wal") || file.endsWith(".db-shm")) {
-			unlinkSync(filePath);
+	for (const entry of readdirSync(DB_DIR, { withFileTypes: true })) {
+		const entryPath = join(DB_DIR, entry.name);
+		if (entry.isDirectory()) {
+			// Namespace directory
+			rmSync(entryPath, { recursive: true });
+		} else if (entry.name.endsWith(".db") || entry.name.endsWith(".db-wal") || entry.name.endsWith(".db-shm")) {
+			unlinkSync(entryPath);
 		}
 	}
 }
@@ -91,6 +117,7 @@ export function getDbCacheSize(): number {
 }
 
 export function dbExists(dbName: string): boolean {
+	if (IN_MEMORY) return dbCache.has(dbName);
 	const dbPath = join(DB_DIR, `${dbName}.db`);
 	return existsSync(dbPath);
 }

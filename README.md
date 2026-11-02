@@ -21,6 +21,21 @@ bunx tursomock serve
 bunx tursomock serve --port 3000 --db-dir ./data
 ```
 
+### テストでの利用
+
+`--memory` を付けると DB をメモリ上だけに保持します。ディスクへ書き込まないのでテストが速くなり、停止するとデータは消えます。
+
+```bash
+tursomock serve --memory --port 8088
+```
+
+URL の先頭に `/ns/<namespace>` を付けると、名前空間ごとに DB が分かれます。並列に動くテストファイルが同じ DB 名を使っても互いに干渉しません。Management API と Hrana の両方で使えます。名前空間に使える文字は DB 名と同じです。
+
+```text
+POST http://localhost:8088/ns/file-a/v1/organizations/mock/databases
+POST http://localhost:8088/ns/file-a/subject-1/v2/pipeline
+```
+
 ### データベースリセット
 
 ```bash
