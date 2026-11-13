@@ -114,6 +114,36 @@ curl http://localhost:8080/v1/organizations/myorg/databases
 }
 ```
 
+#### DB ファイルのアップロード
+
+Turso の `seed: { type: "database_upload" }` と `POST /v1/upload` を再現します。
+
+```bash
+curl -X POST http://localhost:8080/v1/organizations/myorg/databases \
+  -H "Authorization: Bearer mock-platform-token" \
+  -d '{"name": "mydb", "group": "rag", "seed": {"type": "database_upload"}}'
+
+curl -X POST http://mydb.localhost:8080/v1/upload \
+  -H "Authorization: Bearer mock-db-jwt-token" \
+  --data-binary @mydb.db
+```
+
+- アップロードできるのは `database_upload` で作った DB に 1 回だけ
+- ファイルは WAL モード (ヘッダの 18・19 バイト目が 2) でなければ 400
+- 名前空間の中では `/ns/<namespace>/v1/upload` (対象はその名前空間の DB)
+- `--memory` では使えません (`database_upload` の DB を作る時点で 400)
+
+#### グループトークン
+
+```bash
+curl -X POST "http://localhost:8080/v1/organizations/myorg/groups/rag/auth/tokens?authorization=read-only" \
+  -H "Authorization: Bearer mock-platform-token"
+```
+
+- 固定値を返します: full-access は `mock-db-jwt-token`、read-only は `mock-db-jwt-read-only`
+- read-only のトークンで送った pipeline は、読み取り専用 (`mode=ro`) で開いた別の接続で実行します。書き込みは文の形 (CTE・複文・`PRAGMA query_only = 0` など) にかかわらず SQLite が `SQLITE_READONLY` で拒否します (トークン無しは従来どおり素通し)
+- `--memory` では read-only のトークンを受けません (pipeline が 400)。インメモリの DB は読み取り専用の接続を別に開けないので、守れているふりをせずに断ります
+
 > **Note**: `:org` パラメータは任意の値を指定できます（モックのため無視されます）
 
 ## ライセンス
